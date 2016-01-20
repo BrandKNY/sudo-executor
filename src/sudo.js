@@ -10,24 +10,45 @@ let cachedPassword = null;
 
 
 class sudo {
+  /**
+   * The function to run when the command execution triggers the 'data' event
+   * @callback DataHandler
+   * @param {*} data
+   */
+  /**
+   * The function to run when the command execution triggers the 'finish' event
+   * @callback FinalHandler
+   */
+  /**
+   * A function or Promise that returns/resolves with the sudo password;
+   * This allows potential to - for example - wire together logic that can
+   * retrieve an encrypted password from an external source (e.g. Database)
+   * and decrypt it before it is finally passed in as an answer to the
+   * underlying password-prompt.
+   * @callback PasswordGetter
+   */
+  /**
+   * @param {Object} opts - options to setup this instance of the sudo runner
+   * @param {DataHandler} opts.dataHandler - function to process data results
+   * @param {FinalHandler} opts.finalHandler - function to run after stream ends
+   * @param {PasswordGetter} [opts.passwordGetter] - (optional) Function or Promise that returns/resolves the sudo password
+   * @param {Boolean} [opts.isPasswordCached = false] - (optional) should resolved password be cached for possible re-use; defaults to False
+     */
   constructor(opts){
-    this._dataHandler = opts.dataHandler;
-    this._finalHandler = opts.finalHandler;
-    if(opts.customGetPwd){
-      if(typeof opts.customGetPwd === 'function'){
-        this._customGetPwd = opts.customGetPwd;
-      }
-    }
-    this._isPasswordCached = opts.isPasswordCached || false;
+    this.setDataHandler(opts.dataHandler);
+    this.setFinalHandler(opts.finalHandler);
+    !!opts.passwordGetter && this.setPasswordGetter(opts.passwordGetter);
+    this._isPasswordCached = !!opts.isPasswordCached;
   };
 
   /**
    * Execute a command
-   * @param command
+   * @param cmdStr
    * @param opts
    * @returns {*}
      */
-  execute(command, opts) {
+  execute(cmdStr, opts) {
+    let command = cmdStr.split(" ");
     let prompt = '#node-sudo-passwd#';
     let prompts = 0;
 
@@ -73,13 +94,13 @@ class sudo {
             // The previous entry must have been incorrect, since sudo asks again.
             cachedPassword = null;
           }
-          if(this._customGetPwd){
+          if(this._passwordGetter){
             new Promise((resolve, reject)=>{
-              answer = (cachedPassword) ? cachedPassword : this._customGetPwd();
-              if(answer && !answer instanceof Error) {
-                resolve(answer);
+              answer = (cachedPassword) ? cachedPassword : this._passwordGetter();
+              if(answer && !(answer instanceof Error)) {
+                return resolve(answer);
               } else {
-                reject(new Error("Failed to retrieve password with provided customGetPassword function"));
+                return reject(new Error("Failed to retrieve password with provided passwordGetter function"));
               }
             }).then((pwd)=>{
                 child.stdin.write(pwd + '\n');
@@ -87,17 +108,22 @@ class sudo {
               throw new Error(err);
             });
           } else {
+            // prompt user for password via stdInput (default)
             read({prompt: options.prompt || 'sudo requires your password: ', silent: true}, (error, pwd) => {
               answer = pwd;
               child.stdin.write(answer + '\n');
             });
           }
           if(this._isPasswordCached) {
-            cachedPassword = answer;
+            _setCachedPassword.call(this, answer);
           }
         }
       });
     });
+
+    function _setCachedPassword(pwd){
+      this.setCachedPassword(pwd);
+    }
 
     function _enableEventHandlers(){
       this._child.stdout.on('data', this._dataHandler);
@@ -107,6 +133,48 @@ class sudo {
     this._child = child;
     _enableEventHandlers.call(this);
     return child;
+  }
+
+  /**
+   * Set the data handler function explicitly; Usually set w/ constructor options parameter
+   * @param {DataHandler} fn
+     */
+  setDataHandler(fn){
+    this._dataHandler = fn;
+  }
+
+  /**
+   * Set the final handler function explicitly; Usually set w/ constructor options parameter
+   * @param {FinalHandler} fn
+     */
+  setFinalHandler(fn){
+    this._finalHandler = fn;
+  }
+
+  /**
+   * Set the password getter function explicitly; Usually set w/ constructor options parameter
+   * @param {PasswordGetter} fn
+     */
+  setPasswordGetter(fn){
+    if(!fn || typeof fn !== 'function'){
+      return;
+    }
+    this._passwordGetter = fn;
+  }
+
+  /**
+   * Sets the cachedPassword; Only if user enabled caching password w/ constructor option 'isPasswordCached'
+   * @param pwd
+     */
+  setCachedPassword(pwd){
+    cachedPassword = pwd;
+  }
+
+  /**
+   * Clears the cachedPassword reference by setting it to {@type null}
+   */
+  clearCachedPassword(){
+    cachedPassword = null;
   }
 }
 
